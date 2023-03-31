@@ -37,7 +37,7 @@ fn read_serial(
         if let Ok(mag) = parse_serial(s) {
             println!("{:?}", mag);
             positions.push([mag[0], mag[1], mag[2]]);
-            colors.push([0.0, 0.0, 1.0, 1.0]);
+            colors.push([1.0, 1.0, 1.0, 1.0]);
         }
     }
 
@@ -96,7 +96,7 @@ fn setup(
         let y = 600. * phi.sin() * theta.sin();
         let z = 600. * phi.cos();
         positions.push([x, y, z]);
-        colors.push([0.2, 0.2, 0.2, 1.0]);
+        colors.push([0.0, 0.0, 0.1, 1.0]);
     }
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
