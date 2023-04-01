@@ -10,7 +10,7 @@ use bevy::{
     prelude::*,
     reflect::TypeUuid,
     render::{
-        mesh::{MeshVertexBufferLayout, PrimitiveTopology},
+        mesh::{MeshVertexBufferLayout, PrimitiveTopology, VertexAttributeValues},
         render_resource::{
             AsBindGroup, PolygonMode, RenderPipelineDescriptor, ShaderRef,
             SpecializedMeshPipelineError,
@@ -21,6 +21,18 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_serial::{SerialPlugin, SerialReadEvent};
 use rand::distributions::{Distribution, Uniform};
 
+#[derive(Resource, PartialEq)]
+enum AppState {
+    Collect,
+    Calibrate,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        AppState::Collect
+    }
+}
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
@@ -29,6 +41,7 @@ fn main() {
         .add_plugin(MaterialPlugin::<ParticlesMaterial>::default())
         .add_plugin(MaterialPlugin::<LineMaterial>::default())
         .insert_resource(ClearColor(Color::hex("0f0f0f").unwrap()))
+        .insert_resource(AppState::Collect)
         .add_system(update_time_for_particles_material)
         .add_system(read_serial)
         .add_system(pan_orbit_camera)
@@ -37,29 +50,53 @@ fn main() {
         .run();
 }
 
-fn draw_ui(mut contexts: EguiContexts) {
-    egui::Window::new("Calibration").show(
-        contexts.ctx_mut(),
-        |ui| {
-            if ui.button("Done").clicked() {}
-        },
-    );
+fn draw_ui(mut contexts: EguiContexts, mut state: ResMut<AppState>) {
+    egui::Window::new("Calibration").show(contexts.ctx_mut(), |ui| {
+        if AppState::Collect == *state {
+            if ui.button("Done").clicked() {
+                *state = AppState::Calibrate;
+            }
+        }
+    });
 }
 
+#[derive(Component)]
+struct RawMeasurements;
+
 fn read_serial(
-    mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ParticlesMaterial>>,
+    mut query: Query<&Handle<Mesh>, With<RawMeasurements>>,
     mut ev_serial: EventReader<SerialReadEvent>,
+    state: Res<AppState>,
 ) {
-    let mut mesh = Mesh::new(PrimitiveTopology::PointList);
-    let mut positions = vec![];
-    let mut colors = vec![];
+    if !(AppState::Collect == *state) {
+        return;
+    }
+
+    let handle = query.get_single_mut().expect("Raw Measurements mesh to be");
+    let mesh = meshes.get_mut(handle).expect("getting mesh");
+
+    let attribute_positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION);
+    let attribute_colors = mesh.attribute(Mesh::ATTRIBUTE_COLOR);
+
+    let mut positions =
+        if let Some(VertexAttributeValues::Float32x3(previous_positions)) = attribute_positions {
+            previous_positions.clone()
+        } else {
+            vec![]
+        };
+
+    let mut colors =
+        if let Some(VertexAttributeValues::Float32x4(previous_colors)) = attribute_colors {
+            previous_colors.clone()
+        } else {
+            vec![]
+        };
 
     for SerialReadEvent(_label, buffer) in ev_serial.iter() {
         let s = String::from_utf8(buffer.clone()).unwrap();
         if let Ok(mag) = parse_serial(s) {
-            positions.push([mag[0], mag[1], mag[2]]);
+            positions.push([mag[1], -mag[0], mag[2]]);
             colors.push([1.0, 1.0, 1.0, 1.0]);
         }
     }
@@ -67,12 +104,6 @@ fn read_serial(
     if positions.len() > 0 {
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-        commands.spawn(MaterialMeshBundle {
-            mesh: meshes.add(mesh),
-            material: materials.add(ParticlesMaterial { time: 0.0 }),
-            transform: Transform::from_xyz(0.0, 0.0, 0.0),
-            ..default()
-        });
     }
 }
 
@@ -129,24 +160,27 @@ fn setup(
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         ..default()
     });
+    // Uncalibrated Point cloud
+    commands.spawn((
+        MaterialMeshBundle {
+            mesh: meshes.add(Mesh::new(PrimitiveTopology::PointList)),
+            material: materials.add(ParticlesMaterial { time: 0.0 }),
+            ..default()
+        },
+        RawMeasurements,
+    ));
     // Axis
     commands.spawn(MaterialMeshBundle {
         mesh: meshes.add(Mesh::from(LineList {
-            lines: vec![
-                (Vec3::ZERO, Vec3::new(1000.0, 0.0, 0.0)),
-            ],
+            lines: vec![(Vec3::ZERO, Vec3::new(1000.0, 0.0, 0.0))],
         })),
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
-        material: line_materials.add(LineMaterial {
-            color: Color::RED,
-        }),
+        material: line_materials.add(LineMaterial { color: Color::RED }),
         ..default()
     });
     commands.spawn(MaterialMeshBundle {
         mesh: meshes.add(Mesh::from(LineList {
-            lines: vec![
-                (Vec3::ZERO, Vec3::new(0.0, 1000.0, 0.0)),
-            ],
+            lines: vec![(Vec3::ZERO, Vec3::new(0.0, 1000.0, 0.0))],
         })),
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         material: line_materials.add(LineMaterial {
@@ -156,14 +190,10 @@ fn setup(
     });
     commands.spawn(MaterialMeshBundle {
         mesh: meshes.add(Mesh::from(LineList {
-            lines: vec![
-                (Vec3::ZERO, Vec3::new(0.0, 0.0, 1000.0)),
-            ],
+            lines: vec![(Vec3::ZERO, Vec3::new(0.0, 0.0, 1000.0))],
         })),
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
-        material: line_materials.add(LineMaterial {
-            color: Color::BLUE,
-        }),
+        material: line_materials.add(LineMaterial { color: Color::BLUE }),
         ..default()
     });
 }
