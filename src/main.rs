@@ -1,31 +1,49 @@
 //! Calibrate Magnetometer Visualizer
-//! 
+//!
 //! Particles with help from https://github.com/rust-adventure/bevy-examples/tree/main/examples/pointcloud
 //! Camera from https://bevy-cheatbook.github.io/cookbook/pan-orbit-camera.html
 
-
-use bevy::render::render_resource::ShaderRef;
+use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::window::{PrimaryWindow, Window};
 use bevy::{
+    pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
     reflect::TypeUuid,
-    render::{mesh::PrimitiveTopology, render_resource::AsBindGroup},
+    render::{
+        mesh::{MeshVertexBufferLayout, PrimitiveTopology},
+        render_resource::{
+            AsBindGroup, PolygonMode, RenderPipelineDescriptor, ShaderRef,
+            SpecializedMeshPipelineError,
+        },
+    },
 };
+use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_serial::{SerialPlugin, SerialReadEvent};
 use rand::distributions::{Distribution, Uniform};
-use bevy::window::{Window, PrimaryWindow};
-use bevy::input::mouse::{MouseMotion, MouseWheel};
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
+        .add_plugin(EguiPlugin)
         .add_plugin(SerialPlugin::new("COM3", 460800))
-        .insert_resource(ClearColor(Color::hex("0f0f0f").unwrap()))
         .add_plugin(MaterialPlugin::<ParticlesMaterial>::default())
-        .add_startup_system(setup)
+        .add_plugin(MaterialPlugin::<LineMaterial>::default())
+        .insert_resource(ClearColor(Color::hex("0f0f0f").unwrap()))
         .add_system(update_time_for_particles_material)
         .add_system(read_serial)
         .add_system(pan_orbit_camera)
+        .add_system(draw_ui)
+        .add_startup_system(setup)
         .run();
+}
+
+fn draw_ui(mut contexts: EguiContexts) {
+    egui::Window::new("Calibration").show(
+        contexts.ctx_mut(),
+        |ui| {
+            if ui.button("Done").clicked() {}
+        },
+    );
 }
 
 fn read_serial(
@@ -63,9 +81,7 @@ fn parse_serial(input: String) -> Result<[f32; 3], ()> {
         let last_list = &input[index + 1..input.len() - 5];
         let numbers = last_list
             .split(", ")
-            .map(|s| {
-                s.parse::<f32>().unwrap()
-            })
+            .map(|s| s.parse::<f32>().unwrap())
             .collect::<Vec<_>>();
         if numbers.len() >= 3 {
             let (mx, my, mz) = (
@@ -87,6 +103,7 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticlesMaterial>>,
+    mut line_materials: ResMut<Assets<LineMaterial>>,
 ) {
     let mut mesh = Mesh::new(PrimitiveTopology::PointList);
     let uniform01 = Uniform::from(0.0..1.0);
@@ -100,7 +117,7 @@ fn setup(
         let y = 600. * phi.sin() * theta.sin();
         let z = 600. * phi.cos();
         positions.push([x, y, z]);
-        colors.push([0.0, 0.0, 0.1, 1.0]);
+        colors.push([0.0, 0.0, 0.5, 1.0]);
     }
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
@@ -112,6 +129,102 @@ fn setup(
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         ..default()
     });
+    // Axis
+    commands.spawn(MaterialMeshBundle {
+        mesh: meshes.add(Mesh::from(LineList {
+            lines: vec![
+                (Vec3::ZERO, Vec3::new(1000.0, 0.0, 0.0)),
+            ],
+        })),
+        transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        material: line_materials.add(LineMaterial {
+            color: Color::RED,
+        }),
+        ..default()
+    });
+    commands.spawn(MaterialMeshBundle {
+        mesh: meshes.add(Mesh::from(LineList {
+            lines: vec![
+                (Vec3::ZERO, Vec3::new(0.0, 1000.0, 0.0)),
+            ],
+        })),
+        transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        material: line_materials.add(LineMaterial {
+            color: Color::GREEN,
+        }),
+        ..default()
+    });
+    commands.spawn(MaterialMeshBundle {
+        mesh: meshes.add(Mesh::from(LineList {
+            lines: vec![
+                (Vec3::ZERO, Vec3::new(0.0, 0.0, 1000.0)),
+            ],
+        })),
+        transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        material: line_materials.add(LineMaterial {
+            color: Color::BLUE,
+        }),
+        ..default()
+    });
+}
+
+#[derive(Default, AsBindGroup, TypeUuid, Debug, Clone)]
+#[uuid = "050ce6ac-080a-4d8c-b6b5-b5bab7560d8f"]
+struct LineMaterial {
+    #[uniform(0)]
+    color: Color,
+}
+
+impl Material for LineMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/line_material.wgsl".into()
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline<Self>,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayout,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        // This is the important part to tell bevy to render this material as a line between vertices
+        descriptor.primitive.polygon_mode = PolygonMode::Line;
+        Ok(())
+    }
+}
+
+/// A list of lines with a start and end position
+#[derive(Debug, Clone)]
+pub struct LineList {
+    pub lines: Vec<(Vec3, Vec3)>,
+}
+
+impl From<LineList> for Mesh {
+    fn from(line: LineList) -> Self {
+        // This tells wgpu that the positions are list of lines
+        // where every pair is a start and end point
+        let mut mesh = Mesh::new(PrimitiveTopology::LineList);
+
+        let vertices: Vec<_> = line.lines.into_iter().flat_map(|(a, b)| [a, b]).collect();
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
+        mesh
+    }
+}
+
+/// A list of points that will have a line drawn between each consecutive points
+#[derive(Debug, Clone)]
+pub struct LineStrip {
+    pub points: Vec<Vec3>,
+}
+
+impl From<LineStrip> for Mesh {
+    fn from(line: LineStrip) -> Self {
+        // This tells wgpu that the positions are a list of points
+        // where a line will be drawn between each consecutive point
+        let mut mesh = Mesh::new(PrimitiveTopology::LineStrip);
+
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, line.points);
+        mesh
+    }
 }
 
 impl Material for ParticlesMaterial {
@@ -213,7 +326,11 @@ fn pan_orbit_camera(
             let window = get_primary_window_size(window);
             let delta_x = {
                 let delta = rotation_move.x / window.x * std::f32::consts::PI * 2.0;
-                if pan_orbit.upside_down { -delta } else { delta }
+                if pan_orbit.upside_down {
+                    -delta
+                } else {
+                    delta
+                }
             };
             let delta_y = rotation_move.y / window.y * std::f32::consts::PI;
             let yaw = Quat::from_rotation_y(-delta_x);
@@ -248,7 +365,8 @@ fn pan_orbit_camera(
             // parent = x and y rotation
             // child = z-offset
             let rot_matrix = Mat3::from_quat(transform.rotation);
-            transform.translation = pan_orbit.focus + rot_matrix.mul_vec3(Vec3::new(0.0, 0.0, pan_orbit.radius));
+            transform.translation =
+                pan_orbit.focus + rot_matrix.mul_vec3(Vec3::new(0.0, 0.0, pan_orbit.radius));
         }
     }
 
