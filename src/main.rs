@@ -221,7 +221,7 @@ fn setup(
     // Axis
     commands.spawn(MaterialMeshBundle {
         mesh: meshes.add(Mesh::from(LineList {
-            lines: vec![(Vec3::ZERO, Vec3::new(1000.0, 0.0, 0.0))],
+            lines: vec![(Vec3::ZERO, Vec3::new(F / 2., 0.0, 0.0))],
         })),
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         material: line_materials.add(LineMaterial { color: Color::RED }),
@@ -229,7 +229,7 @@ fn setup(
     });
     commands.spawn(MaterialMeshBundle {
         mesh: meshes.add(Mesh::from(LineList {
-            lines: vec![(Vec3::ZERO, Vec3::new(0.0, 1000.0, 0.0))],
+            lines: vec![(Vec3::ZERO, Vec3::new(0.0, F / 2., 0.0))],
         })),
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         material: line_materials.add(LineMaterial {
@@ -239,7 +239,7 @@ fn setup(
     });
     commands.spawn(MaterialMeshBundle {
         mesh: meshes.add(Mesh::from(LineList {
-            lines: vec![(Vec3::ZERO, Vec3::new(0.0, 0.0, 1000.0))],
+            lines: vec![(Vec3::ZERO, Vec3::new(0.0, 0.0, F / 2.))],
         })),
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         material: line_materials.add(LineMaterial { color: Color::BLUE }),
@@ -248,9 +248,9 @@ fn setup(
     // North
     let i = 66.8579f32.to_radians();
     let d = -5.9791f32.to_radians();
-    let x: f32 = 750. * i.cos() * d.cos();
-    let y: f32 = 750. * i.cos() * d.sin();
-    let z: f32 = 750. * i.sin();
+    let x: f32 = 1.2 * F * i.cos() * d.cos();
+    let y: f32 = 1.2 * F * i.cos() * d.sin();
+    let z: f32 = 1.2 * F * i.sin();
     commands.spawn(MaterialMeshBundle {
         mesh: meshes.add(Mesh::from(LineList {
             lines: vec![(Vec3::ZERO, Vec3::new(x, y, z))],
