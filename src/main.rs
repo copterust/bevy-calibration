@@ -21,6 +21,28 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_serial::{SerialPlugin, SerialReadEvent};
 use rand::distributions::{Distribution, Uniform};
 
+use nalgebra::{Matrix3, Vector3};
+
+mod math;
+
+// Get yours at https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml#igrfwmm
+const F: f32 = 486.027;
+
+#[derive(Resource)]
+struct Calibration {
+    a_1: Matrix3<f64>,
+    b: Vector3<f64>,
+}
+
+impl Default for Calibration {
+    fn default() -> Self {
+        Calibration {
+            a_1: Matrix3::identity(),
+            b: Vector3::zeros(),
+        }
+    }
+}
+
 #[derive(Resource, PartialEq)]
 enum AppState {
     Collect,
@@ -42,6 +64,7 @@ fn main() {
         .add_plugin(MaterialPlugin::<LineMaterial>::default())
         .insert_resource(ClearColor(Color::hex("0f0f0f").unwrap()))
         .insert_resource(AppState::Collect)
+        .insert_resource(Calibration::default())
         .add_system(update_time_for_particles_material)
         .add_system(read_serial)
         .add_system(pan_orbit_camera)
@@ -50,11 +73,30 @@ fn main() {
         .run();
 }
 
-fn draw_ui(mut contexts: EguiContexts, mut state: ResMut<AppState>) {
+fn draw_ui(
+    mut contexts: EguiContexts,
+    mut state: ResMut<AppState>,
+    mut query: Query<&Handle<Mesh>, With<RawMeasurements>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut calibration: ResMut<Calibration>,
+) {
     egui::Window::new("Calibration").show(contexts.ctx_mut(), |ui| {
         if AppState::Collect == *state {
             if ui.button("Done").clicked() {
                 *state = AppState::Calibrate;
+                let handle = query.get_single_mut().expect("Raw Measurements mesh to be");
+                let mesh = meshes.get_mut(handle).expect("getting mesh");
+                let attribute_positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION);
+                if let Some(VertexAttributeValues::Float32x3(positions)) = attribute_positions {
+                    let samples: Vec<[f64; 3]> = positions
+                        .into_iter()
+                        .map(|arr| [arr[0] as f64, arr[1] as f64, arr[2] as f64])
+                        .collect();
+                    let (m, n, d) = math::ellipsoid_fit(&(samples as Vec<[f64; 3]>));
+                    let (a_1, b) = math::ellipsoid_to_calibration(m, n, d, F as f64);
+                    calibration.a_1 = a_1;
+                    calibration.b = b;
+                }
             }
         }
     });
@@ -68,11 +110,8 @@ fn read_serial(
     mut query: Query<&Handle<Mesh>, With<RawMeasurements>>,
     mut ev_serial: EventReader<SerialReadEvent>,
     state: Res<AppState>,
+    calibration: Res<Calibration>,
 ) {
-    if !(AppState::Collect == *state) {
-        return;
-    }
-
     let handle = query.get_single_mut().expect("Raw Measurements mesh to be");
     let mesh = meshes.get_mut(handle).expect("getting mesh");
 
@@ -96,8 +135,18 @@ fn read_serial(
     for SerialReadEvent(_label, buffer) in ev_serial.iter() {
         let s = String::from_utf8(buffer.clone()).unwrap();
         if let Ok(mag) = parse_serial(s) {
-            positions.push([mag[1], -mag[0], mag[2]]);
-            colors.push([1.0, 1.0, 1.0, 1.0]);
+            let cal = math::calibrated_sample(
+                &mag,
+                &calibration.a_1.map(|x| x as f32),
+                &calibration.b.map(|x| x as f32),
+            );
+            positions.push([cal[0], cal[1], cal[2]]);
+
+            if AppState::Collect == *state {
+                colors.push([1.0, 0.0, 0.0, 1.0]);
+            } else {
+                colors.push([0.0, 1.0, 0.0, 1.0])
+            }
         }
     }
 
@@ -144,9 +193,9 @@ fn setup(
     for _ in 0..1000 {
         let theta: f32 = 2.0 * std::f32::consts::PI * uniform01.sample(&mut rng);
         let phi = (1.0 - 2.0 * uniform01.sample(&mut rng)).acos();
-        let x = 600. * phi.sin() * theta.cos();
-        let y = 600. * phi.sin() * theta.sin();
-        let z = 600. * phi.cos();
+        let x = F * phi.sin() * theta.cos();
+        let y = F * phi.sin() * theta.sin();
+        let z = F * phi.cos();
         positions.push([x, y, z]);
         colors.push([0.0, 0.0, 0.5, 1.0]);
     }
@@ -194,6 +243,22 @@ fn setup(
         })),
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         material: line_materials.add(LineMaterial { color: Color::BLUE }),
+        ..default()
+    });
+    // North
+    let i = 66.8579f32.to_radians();
+    let d = -5.9791f32.to_radians();
+    let x: f32 = 750. * i.cos() * d.cos();
+    let y: f32 = 750. * i.cos() * d.sin();
+    let z: f32 = 750. * i.sin();
+    commands.spawn(MaterialMeshBundle {
+        mesh: meshes.add(Mesh::from(LineList {
+            lines: vec![(Vec3::ZERO, Vec3::new(x, y, z))],
+        })),
+        transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        material: line_materials.add(LineMaterial {
+            color: Color::YELLOW,
+        }),
         ..default()
     });
 }

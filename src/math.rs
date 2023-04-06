@@ -1,5 +1,5 @@
 #![allow(unused)]
-use nalgebra::{DMatrix, Matrix3, Matrix6, OVector, SymmetricEigen, Vector3, U3};
+use nalgebra::{DMatrix, Matrix3, Matrix3x1, Matrix6, OVector, SymmetricEigen, Vector3, U3};
 
 /// Returns principal square root of the 3x3 matrix
 fn sqrt_m(matrix: &Matrix3<f64>) -> Matrix3<f64> {
@@ -20,15 +20,15 @@ pub fn ellipsoid_to_calibration(
     n: Vector3<f64>,
     d: f64,
     f: f64,
-) -> (Matrix3<f64>, f64) {
+) -> (Matrix3<f64>, Vector3<f64>) {
     let m_1 = m.try_inverse().expect("m to be inversible");
-    let b = n.dot(&(m_1 * n));
-    let a_1 = (f / (b - d).sqrt()) * sqrt_m(&m);
+    let b = -(m_1 * n);
+    let a_1 = (f / ((n.transpose() * (m_1 * n))[0] - d).sqrt()) * sqrt_m(&m);
     return (a_1, b);
 }
 
 /// Fits ellipsoid to set of points
-fn ellipsoid_fit(s: &Vec<[f64; 3]>) -> (Matrix3<f64>, Vector3<f64>, f64) {
+pub fn ellipsoid_fit(s: &Vec<[f64; 3]>) -> (Matrix3<f64>, Vector3<f64>, f64) {
     let n = s.len();
     let mut d = DMatrix::<f64>::zeros(10, n);
     for j in 0..n {
@@ -76,4 +76,15 @@ fn ellipsoid_fit(s: &Vec<[f64; 3]>) -> (Matrix3<f64>, Vector3<f64>, f64) {
     let n = Vector3::new(v_2[0], v_2[1], v_2[2]);
     let d = v_2[3];
     (m, n, d)
+}
+
+/// Transformation of a single sample
+pub fn calibrated_sample(
+    sample: &[f32; 3],
+    a_1: &Matrix3<f32>,
+    b: &Vector3<f32>,
+) -> Matrix3x1<f32> {
+    let s = Matrix3x1::from_row_slice(sample);
+    let transformed_s = a_1 * (s - b);
+    transformed_s
 }
