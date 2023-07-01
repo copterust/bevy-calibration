@@ -20,7 +20,8 @@ use bevy::{
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_serial::{SerialPlugin, SerialReadEvent};
 use rand::distributions::{Distribution, Uniform};
-
+use serde::Deserialize;
+use serde_json;
 use nalgebra::{Matrix3, Vector3};
 
 mod math;
@@ -32,6 +33,16 @@ const F: f32 = 486.027;
 struct Calibration {
     a_1: Matrix3<f64>,
     b: Vector3<f64>,
+}
+
+#[derive(Default, Deserialize)]
+pub struct Sample {
+    pub dt: f32,
+    pub accel: [f32; 3],
+    pub gyro: [f32; 3],
+    pub cal_mag: [f32; 3],
+    pub state: [[f32; 7]; 1],
+    pub raw_mag: [f32; 3],
 }
 
 impl Default for Calibration {
@@ -49,6 +60,13 @@ enum AppState {
     Calibrate,
 }
 
+#[derive(Resource, PartialEq)]
+enum SampleKind {
+    Raw,
+    Cal
+}
+
+
 impl Default for AppState {
     fn default() -> Self {
         AppState::Collect
@@ -56,16 +74,27 @@ impl Default for AppState {
 }
 
 fn main() {
+    let name = std::env::args().skip(1).next();
+    let name = name.as_deref().unwrap_or("tilt1.txt");
+
+    let kind = std::env::args().skip(2).next().unwrap_or("raw".to_string());
+    let kind = if kind == "cal" {
+        SampleKind::Cal
+    } else {
+        SampleKind::Raw
+    };
+
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugin(EguiPlugin)
-        .add_plugin(SerialPlugin::new("COM3", 460800))
+        .add_plugin(SerialPlugin::new(name, 460800))
         .add_plugin(MaterialPlugin::<ParticlesMaterial>::default())
         .add_plugin(MaterialPlugin::<LineMaterial>::default())
         .insert_resource(ClearColor(Color::hex("0f0f0f").unwrap()))
         .insert_resource(AppState::Collect)
         .insert_resource(Calibration::default())
         .add_system(update_time_for_particles_material)
+        .insert_resource(kind)
         .add_system(read_serial)
         .add_system(pan_orbit_camera)
         .add_system(draw_ui)
@@ -111,6 +140,7 @@ fn read_serial(
     mut ev_serial: EventReader<SerialReadEvent>,
     state: Res<AppState>,
     calibration: Res<Calibration>,
+    kind: Res<SampleKind>
 ) {
     let handle = query.get_single_mut().expect("Raw Measurements mesh to be");
     let mesh = meshes.get_mut(handle).expect("getting mesh");
@@ -132,22 +162,34 @@ fn read_serial(
             vec![]
         };
 
+    let mut bubu = Box::new(Sample::default());
+
     for SerialReadEvent(_label, buffer) in ev_serial.iter() {
         let s = String::from_utf8(buffer.clone()).unwrap();
-        if let Ok(mag) = parse_serial(s) {
-            let cal = math::calibrated_sample(
-                &mag,
-                &calibration.a_1.map(|x| x as f32),
-                &calibration.b.map(|x| x as f32),
-            );
-            positions.push([cal[0], cal[1], cal[2]]);
 
-            if AppState::Collect == *state {
-                colors.push([1.0, 0.0, 0.0, 1.0]);
-            } else {
-                colors.push([0.0, 1.0, 0.0, 1.0])
-            }
+        *bubu = match serde_json::from_str(&s) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let cal = match *kind {
+            SampleKind::Raw => bubu.raw_mag,
+            SampleKind::Cal => bubu.cal_mag,
+        };
+
+        // if let Ok(mag) = parse_serial(s) {
+            // let cal = math::calibrated_sample(
+            //     &mag,
+            //     &calibration.a_1.map(|x| x as f32),
+            //     &calibration.b.map(|x| x as f32),
+            // );
+        positions.push([cal[0], cal[1], cal[2]]);
+
+        if AppState::Collect == *state {
+            colors.push([1.0, 0.0, 0.0, 1.0]);
+        } else {
+            colors.push([0.0, 1.0, 0.0, 1.0])
         }
+        // }
     }
 
     if positions.len() > 0 {

@@ -684,6 +684,7 @@ dependencies = [
  "bevy_serial",
  "nalgebra",
  "rand",
+ "serde",
  "serde_json",
 ]
 
