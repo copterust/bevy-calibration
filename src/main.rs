@@ -19,10 +19,12 @@ use bevy::{
 };
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_serial::{SerialPlugin, SerialReadEvent};
+use nalgebra::{Matrix3, Vector3};
 use rand::distributions::{Distribution, Uniform};
 use serde::Deserialize;
 use serde_json;
-use nalgebra::{Matrix3, Vector3};
+
+use crate::math::calibrated_sample;
 
 mod math;
 
@@ -63,9 +65,8 @@ enum AppState {
 #[derive(Resource, PartialEq)]
 enum SampleKind {
     Raw,
-    Cal
+    Cal,
 }
-
 
 impl Default for AppState {
     fn default() -> Self {
@@ -140,7 +141,7 @@ fn read_serial(
     mut ev_serial: EventReader<SerialReadEvent>,
     state: Res<AppState>,
     calibration: Res<Calibration>,
-    kind: Res<SampleKind>
+    kind: Res<SampleKind>,
 ) {
     let handle = query.get_single_mut().expect("Raw Measurements mesh to be");
     let mesh = meshes.get_mut(handle).expect("getting mesh");
@@ -175,16 +176,15 @@ fn read_serial(
             Err(_) => continue,
         };
         let cal = match *kind {
-            SampleKind::Raw => bubu.raw_mag,
+            SampleKind::Raw => math::calibrated_sample(
+                &bubu.raw_mag,
+                &calibration.a_1.map(|x| x as f32),
+                &calibration.b.map(|x| x as f32),
+            )
+            .into(),
             SampleKind::Cal => bubu.cal_mag,
         };
 
-        // if let Ok(mag) = parse_serial(s) {
-            // let cal = math::calibrated_sample(
-            //     &mag,
-            //     &calibration.a_1.map(|x| x as f32),
-            //     &calibration.b.map(|x| x as f32),
-            // );
         positions.push([cal[0], cal[1], cal[2]]);
 
         if AppState::Collect == *state {
