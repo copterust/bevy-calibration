@@ -24,8 +24,6 @@ use rand::distributions::{Distribution, Uniform};
 use serde::Deserialize;
 use serde_json;
 
-use crate::math::calibrated_sample;
-
 mod math;
 
 // Get yours at https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml#igrfwmm
