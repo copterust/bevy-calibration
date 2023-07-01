@@ -165,10 +165,13 @@ fn read_serial(
     let mut bubu = Box::new(Sample::default());
 
     for SerialReadEvent(_label, buffer) in ev_serial.iter() {
-        let s = String::from_utf8(buffer.clone()).unwrap();
+        let s = match String::from_utf8(buffer.clone()) {
+            Ok(x) => x,
+            Err(_) => continue,
+        };
 
         *bubu = match serde_json::from_str(&s) {
-            Ok(s) => s,
+            Ok(k) => k,
             Err(_) => continue,
         };
         let cal = match *kind {
