@@ -31,7 +31,7 @@ mod math;
 // Get yours at https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml#igrfwmm
 const F: f32 = 486.027;
 
-#[derive(Resource)]
+#[derive(Resource, Debug)]
 struct Calibration {
     a_1: Matrix3<f64>,
     b: Vector3<f64>,
@@ -126,6 +126,7 @@ fn draw_ui(
                     let (a_1, b) = math::ellipsoid_to_calibration(m, n, d, F as f64);
                     calibration.a_1 = a_1;
                     calibration.b = b;
+                    println!("Calibration done: {:?}", calibration);
                 }
             }
         }
