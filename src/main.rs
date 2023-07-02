@@ -35,6 +35,11 @@ struct Calibration {
     b: Vector3<f64>,
 }
 
+#[derive(Resource, Default)]
+struct Samples {
+    all: Vec<Sample>,
+}
+
 #[derive(Default, Deserialize)]
 pub struct Sample {
     pub dt: f32,
@@ -92,8 +97,9 @@ fn main() {
         .insert_resource(ClearColor(Color::hex("0f0f0f").unwrap()))
         .insert_resource(AppState::Collect)
         .insert_resource(Calibration::default())
-        .add_system(update_time_for_particles_material)
         .insert_resource(kind)
+        .insert_resource(Samples::default())
+        .add_system(update_time_for_particles_material)
         .add_system(read_serial)
         .add_system(pan_orbit_camera)
         .add_system(draw_ui)
@@ -107,9 +113,27 @@ fn draw_ui(
     mut query: Query<&Handle<Mesh>, With<RawMeasurements>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut calibration: ResMut<Calibration>,
+    history: Res<Samples>,
 ) {
     egui::Window::new("Calibration").show(contexts.ctx_mut(), |ui| {
         if AppState::Collect == *state {
+            if ui.button("At Rest").clicked() {
+                let accel = history.all.iter().map(|s| s.accel);
+                let a_n = accel.len() as f32;
+                let accel_mean = accel
+                    .fold([0., 0., 0.], |s, a| [s[0] + a[0], s[1] + a[1], s[2] + a[2]])
+                    .map(|c| c / a_n);
+                let gyro = history.all.iter().map(|s| s.gyro);
+                let g_n = gyro.len() as f32;
+                let gyro_mean = gyro
+                    .fold([0., 0., 0.], |s, a| [s[0] + a[0], s[1] + a[1], s[2] + a[2]])
+                    .map(|c| c / a_n);
+                println!(
+                    "Mean accel at rest: {:?}, mean gyro at rest {:?}",
+                    accel_mean, gyro_mean
+                );
+            }
+
             if ui.button("Done").clicked() {
                 *state = AppState::Calibrate;
                 let handle = query.get_single_mut().expect("Raw Measurements mesh to be");
@@ -141,6 +165,7 @@ fn read_serial(
     state: Res<AppState>,
     calibration: Res<Calibration>,
     kind: Res<SampleKind>,
+    mut history: ResMut<Samples>,
 ) {
     let handle = query.get_single_mut().expect("Raw Measurements mesh to be");
     let mesh = meshes.get_mut(handle).expect("getting mesh");
@@ -183,6 +208,7 @@ fn read_serial(
             .into(),
             SampleKind::Cal => bubu.cal_mag,
         };
+        history.all.push(*bubu);
 
         positions.push([cal[0], cal[1], cal[2]]);
 
@@ -198,29 +224,6 @@ fn read_serial(
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     }
-}
-
-fn parse_serial(input: String) -> Result<[f32; 3], ()> {
-    if let Some(index) = input.rfind('[') {
-        let last_list = &input[index + 1..input.len() - 5];
-        let numbers = last_list
-            .split(", ")
-            .map(|s| s.parse::<f32>().unwrap())
-            .collect::<Vec<_>>();
-        if numbers.len() >= 3 {
-            let (mx, my, mz) = (
-                numbers[numbers.len() - 3],
-                numbers[numbers.len() - 2],
-                numbers[numbers.len() - 1],
-            );
-            return Ok([mx, my, mz]);
-        } else {
-            println!("Error: not enough numbers found");
-        }
-    } else {
-        println!("Error: no list found");
-    }
-    Err(())
 }
 
 fn setup(
