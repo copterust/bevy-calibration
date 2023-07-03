@@ -23,16 +23,21 @@ use nalgebra::{Matrix3, Vector3};
 use rand::distributions::{Distribution, Uniform};
 use serde::Deserialize;
 use serde_json;
+use ahrs::MargEkf;
 
 mod math;
 
 // Get yours at https://www.ngdc.noaa.gov/geomag/calculators/magcalc.shtml#igrfwmm
 const F: f32 = 486.027;
 
+#[derive(Resource, Debug, Deref, DerefMut)]
+struct WrappedMarg(MargEkf);
+
 #[derive(Resource, Debug)]
 struct Calibration {
     a_1: Matrix3<f64>,
     b: Vector3<f64>,
+    marg: WrappedMarg,
 }
 
 #[derive(Resource, Default)]
@@ -52,9 +57,11 @@ pub struct Sample {
 
 impl Default for Calibration {
     fn default() -> Self {
+        let marg = WrappedMarg(ahrs::MargEkf::new());
         Calibration {
             a_1: Matrix3::identity(),
             b: Vector3::zeros(),
+            marg,
         }
     }
 }
@@ -163,9 +170,10 @@ fn read_serial(
     mut query: Query<&Handle<Mesh>, With<RawMeasurements>>,
     mut ev_serial: EventReader<SerialReadEvent>,
     state: Res<AppState>,
-    calibration: Res<Calibration>,
+    mut calibration: ResMut<Calibration>,
     kind: Res<SampleKind>,
     mut history: ResMut<Samples>,
+    mut cubes: Query<(&mut Transform, &QuatTarget)>
 ) {
     let handle = query.get_single_mut().expect("Raw Measurements mesh to be");
     let mesh = meshes.get_mut(handle).expect("getting mesh");
@@ -199,6 +207,13 @@ fn read_serial(
             Ok(k) => k,
             Err(_) => continue,
         };
+        let quat = calibration.marg.0.state.clone();
+        let mut g = bubu.gyro;
+        g[0] = g[0];
+        g[1] = g[1];
+        g[2] = g[2];
+
+        calibration.marg.0.predict(g[0], g[1], g[2], bubu.dt);
         let cal = match *kind {
             SampleKind::Raw => math::calibrated_sample(
                 &bubu.raw_mag,
@@ -208,6 +223,19 @@ fn read_serial(
             .into(),
             SampleKind::Cal => bubu.cal_mag,
         };
+        let mut a = bubu.accel;
+        a[0] /= 10.;
+        a[1] /= 10.;
+        a[2] /= 10.;
+        let mut m = cal;
+        m[0] /= F;
+        m[1] /= F;
+        m[2] /= F;
+        calibration.marg.0.update(a, m);
+        for (mut transform, _cube) in &mut cubes {
+            transform.rotation = Quat::from_xyzw(quat[1], quat[2], quat[3], quat[0]);
+        }
+
         history.all.push(*bubu);
 
         positions.push([cal[0], cal[1], cal[2]]);
@@ -226,10 +254,14 @@ fn read_serial(
     }
 }
 
+#[derive(Component)]
+struct QuatTarget;
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticlesMaterial>>,
+    mut cube_materials: ResMut<Assets<StandardMaterial>>,
     mut line_materials: ResMut<Assets<LineMaterial>>,
 ) {
     let mut mesh = Mesh::new(PrimitiveTopology::PointList);
@@ -248,6 +280,15 @@ fn setup(
     }
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+
+    commands
+        .spawn(PbrBundle {
+            mesh: meshes.add(Mesh::from(shape::Cube { size: F / 2. })),
+            material: cube_materials.add(Color::rgb(1., 0.4, 0.2).into()),
+            transform: Transform::from_xyz(0., 0.0, 0.0),
+            ..default()
+        })
+        .insert(QuatTarget);
 
     spawn_camera(&mut commands);
     commands.spawn(MaterialMeshBundle {
@@ -294,7 +335,7 @@ fn setup(
     });
     // North
     let i = 66.8579f32.to_radians();
-    let d = -5.9791f32.to_radians();
+    let d = 5.9791f32.to_radians();
     let x: f32 = 1.2 * F * i.cos() * d.cos();
     let y: f32 = 1.2 * F * i.cos() * d.sin();
     let z: f32 = 1.2 * F * i.sin();
