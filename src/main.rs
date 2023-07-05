@@ -3,6 +3,7 @@
 //! Particles with help from https://github.com/rust-adventure/bevy-examples/tree/main/examples/pointcloud
 //! Camera from https://bevy-cheatbook.github.io/cookbook/pan-orbit-camera.html
 
+use ahrs::MargEkf;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::window::{PrimaryWindow, Window};
 use bevy::{
@@ -23,7 +24,6 @@ use nalgebra::{Matrix3, Vector3};
 use rand::distributions::{Distribution, Uniform};
 use serde::Deserialize;
 use serde_json;
-use ahrs::MargEkf;
 
 mod math;
 
@@ -131,7 +131,6 @@ fn draw_ui(
                     .fold([0., 0., 0.], |s, a| [s[0] + a[0], s[1] + a[1], s[2] + a[2]])
                     .map(|c| c / a_n);
                 let gyro = history.all.iter().map(|s| s.gyro);
-                let g_n = gyro.len() as f32;
                 let gyro_mean = gyro
                     .fold([0., 0., 0.], |s, a| [s[0] + a[0], s[1] + a[1], s[2] + a[2]])
                     .map(|c| c / a_n);
@@ -173,7 +172,7 @@ fn read_serial(
     mut calibration: ResMut<Calibration>,
     kind: Res<SampleKind>,
     mut history: ResMut<Samples>,
-    mut cubes: Query<(&mut Transform, &QuatTarget)>
+    mut cubes: Query<(&mut Transform, &QuatTarget)>,
 ) {
     let handle = query.get_single_mut().expect("Raw Measurements mesh to be");
     let mesh = meshes.get_mut(handle).expect("getting mesh");
@@ -209,9 +208,12 @@ fn read_serial(
         };
         let quat = calibration.marg.0.state.clone();
         let mut g = bubu.gyro;
-        g[0] = g[0];
-        g[1] = g[1];
-        g[2] = g[2];
+        g = g
+            .iter()
+            .map(|e| e * 2. * std::f32::consts::PI / 180.)
+            .collect::<Vec<f32>>()
+            .try_into()
+            .expect("to convert g vector to array");
 
         calibration.marg.0.predict(g[0], g[1], g[2], bubu.dt);
         let cal = match *kind {
@@ -223,15 +225,17 @@ fn read_serial(
             .into(),
             SampleKind::Cal => bubu.cal_mag,
         };
-        let mut a = bubu.accel;
-        a[0] /= 10.;
-        a[1] /= 10.;
-        a[2] /= 10.;
-        let mut m = cal;
-        m[0] /= F;
-        m[1] /= F;
-        m[2] /= F;
-        calibration.marg.0.update(a, m);
+        let a = bubu.accel;
+        let a_norm = a.iter().map(|e| e.powi(2)).sum::<f32>().sqrt();
+        let a = a.iter().map(|e| e / a_norm).collect::<Vec<f32>>();
+        let m = cal;
+        let m_norm = m.iter().map(|e| e.powi(2)).sum::<f32>().sqrt();
+        let m = m.iter().map(|e| e / m_norm).collect::<Vec<f32>>();
+        calibration.marg.0.update(
+            a.try_into().expect("wild success"),
+            m.try_into().expect("same here"),
+        );
+
         for (mut transform, _cube) in &mut cubes {
             transform.rotation = Quat::from_xyzw(quat[1], quat[2], quat[3], quat[0]);
         }
@@ -245,7 +249,6 @@ fn read_serial(
         } else {
             colors.push([0.0, 1.0, 0.0, 1.0])
         }
-        // }
     }
 
     if positions.len() > 0 {
