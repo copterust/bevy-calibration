@@ -1084,6 +1084,7 @@ dependencies = [
  "ahrs",
  "bevy 0.13.0",
  "bevy_serial",
+ "bytemuck",
  "nalgebra",
  "rand",
  "serde",
